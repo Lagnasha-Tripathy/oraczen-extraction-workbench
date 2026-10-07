@@ -50,30 +50,30 @@ oraczen-extraction-workbench/
 ├── DECISIONS.md
 └── README.md
 ```
-Setup
+##Setup
 Prerequisites
 
-Make sure you have:
+##Make sure you have:
 
 Python 3.11+
 Node.js 18+
 npm
-1. Clone the repository
+##1. Clone the repository
 git clone https://github.com/Lagnasha-Tripathy/oraczen-extraction-workbench.git
 cd oraczen-extraction-workbench
-2. Start the Backend
+##2. Start the Backend
 
-Create and activate a virtual environment:
+####Create and activate a virtual environment:
 
 python3 -m venv .venv
 source .venv/bin/activate
 
-Install the dependencies:
+####Install the dependencies:
 
 cd backend
 pip install -r requirements.txt
 
-Start the server:
+##Start the server:
 
 uvicorn app.main:app --reload --port 8000
 
@@ -88,7 +88,7 @@ http://localhost:8000/health
 FastAPI documentation is available at:
 
 http://localhost:8000/docs
-3. Start the Frontend
+##3. Start the Frontend
 
 Open a new terminal and go to the frontend:
 
