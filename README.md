@@ -1,256 +1,205 @@
-
 # Oraczen Extraction Workbench
 
-A simple Human-in-the-Loop extraction system for processing customer support tickets.
+A review tool for LLM-extracted support-ticket records. Raw tickets are turned into structured records, every output is validated against a strict schema, a failed extraction is retried once, and anything still doubtful goes to a human reviewer.
 
-The application takes raw support tickets, extracts structured information using a deterministic mock provider, validates the result, retries once if validation fails, and sends records that still fail to `needs_review` for human correction.
+**Stack:** FastAPI (Python) backend and Next.js (App Router, TypeScript) frontend. Runs with **no API key** using a deterministic mock provider.
 
-## Tech Stack
+**Live demo:** `<your Vercel URL>`
+**Backend API:** `<your Render URL>` (the free instance sleeps when idle, so the first request can take about 50 seconds)
 
-- **Backend:** Python, FastAPI, Pydantic, asyncio
-- **Frontend:** Next.js, React, TypeScript, Tailwind CSS
-- **Testing:** Pytest
-- **Storage:** In-memory storage
-- **Provider:** Deterministic mock provider
+---
 
-No database, API key, Redis, Docker, or external LLM is required.
+## Setup
 
-## Main Features
+**Prerequisites:** Python 3.11+, Node.js 18+, npm.
 
-- Browse, search, and filter 150 support tickets
-- Select multiple tickets and start an extraction job
-- Background processing with configurable concurrency
-- Strict Pydantic validation
-- Exactly one retry after validation failure
-- `needs_review` handling for records that fail twice
-- Per-field confidence and grounding information
-- Human editing with validation
-- Tracks model-generated and human-edited fields
-- Live job progress through polling
-- CSV export of results
-- Deterministic failure cases for testing
+### 1. Clone
 
-## Project Structure
-
-```text
-oraczen-extraction-workbench/
-├── backend/
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── schemas.py
-│   │   ├── store.py
-│   │   ├── worker.py
-│   │   ├── mock_provider.py
-│   │   └── routes/
-│   ├── tests/
-│   └── requirements.txt
-├── frontend/
-├── data/
-│   └── tickets.jsonl
-├── DECISIONS.md
-└── README.md
-```
-##Setup
-Prerequisites
-
-##Make sure you have:
-
-Python 3.11+
-Node.js 18+
-npm
-##1. Clone the repository
+```bash
 git clone https://github.com/Lagnasha-Tripathy/oraczen-extraction-workbench.git
 cd oraczen-extraction-workbench
-##2. Start the Backend
+```
 
-####Create and activate a virtual environment:
+### 2. Backend (terminal 1)
 
+```bash
 python3 -m venv .venv
-source .venv/bin/activate
-
-####Install the dependencies:
-
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 cd backend
 pip install -r requirements.txt
-
-##Start the server:
-
 uvicorn app.main:app --reload --port 8000
+```
 
-The backend will run at:
+- Health check: http://localhost:8000/health
+- API docs: http://localhost:8000/docs
 
-http://localhost:8000
+### 3. Frontend (terminal 2)
 
-You can check that it is running at:
-
-http://localhost:8000/health
-
-FastAPI documentation is available at:
-
-http://localhost:8000/docs
-##3. Start the Frontend
-
-Open a new terminal and go to the frontend:
-
+```bash
 cd oraczen-extraction-workbench/frontend
 npm install
-
-Create a .env.local file:
-
-NEXT_PUBLIC_API_URL=http://localhost:8000
-
-Start the frontend:
-
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
 npm run dev
+```
 
-The frontend will run at:
+Open http://localhost:3000.
 
-http://localhost:3000
+---
 
-Open that URL in your browser to use the application.
+## Configuration
 
-Configuration
+All variables are listed in `.env.example`. No API key is needed.
 
-The application uses the deterministic mock provider by default.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `mock` | Extraction provider (deterministic mock) |
+| `MAX_CONCURRENCY` | `5` | Maximum tickets processed at the same time |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL used by the frontend |
 
-LLM_PROVIDER=mock
-MAX_CONCURRENCY=5
+---
 
-MAX_CONCURRENCY controls how many tickets can be processed at the same time.
+## How it works
 
-No external API key is needed.
+```text
+Raw ticket
+   │
+   ├─ empty body ──────────────► needs_review (model not called)
+   │
+   ▼
+Mock provider ──► Pydantic validation
+                     │
+          valid ─────┴───── invalid
+            │                  │
+          done            retry once
+                               │
+                    valid ─────┴───── invalid
+                      │                  │
+                    done            needs_review
+                                         │
+                                  human correction
+                                         │
+                              same validation ──► done
+```
 
-Application Flow
-1. Select Tickets
+Each ticket is processed independently, so one bad ticket never fails the batch.
 
-The home page displays the available support tickets.
+### Application flow
 
-Users can search, filter by channel, select individual tickets, or select multiple tickets.
+1. **Select tickets.** The home page lists all 150 tickets with search and a channel filter. Select any subset.
+2. **Start a job.** `POST /api/jobs` returns `202` with a job id immediately, and extraction runs in the background.
+3. **Extract and validate.** Each ticket goes to the provider and the output is validated against the Pydantic schema.
+4. **Retry once.** If validation fails, extraction is attempted one more time. A second failure sends the item to `needs_review`, keeps the raw output and validation errors, and the rest of the batch continues.
+5. **Review.** The raw ticket is shown next to the editable extracted fields. Items needing review are highlighted and sorted to the top. Edits are validated with the same schema, and errors are shown against the field.
+6. **Export.** One click downloads the records as CSV.
 
-2. Start a Job
+### Concurrency
 
-When the user starts extraction, the backend immediately creates a job and returns a job ID with HTTP 202.
+An `asyncio.Semaphore` limits how many tickets run at once (`MAX_CONCURRENCY`, default 5).
 
-The actual processing continues in the background.
+### Progress updates
 
-3. Extract and Validate
+The frontend polls the job endpoint, so progress and per-item results appear while the job is still running.
 
-Each ticket is sent to the mock provider.
+### Human edits
 
-The returned data is validated against the required Pydantic schema.
+Each record has an `edited_fields` list. Only fields whose value actually changed are marked as human-edited. The UI shows a "Human edited" badge, and the CSV includes the same column.
 
-4. Retry Failed Extraction
+---
 
-If validation fails, the system retries the extraction exactly once and provides the validation error as feedback.
+## API
 
-If the second attempt succeeds, the record is marked as done.
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/tickets` | List, search and filter tickets |
+| `POST` | `/api/jobs` | Start an extraction job (returns `202`) |
+| `GET` | `/api/jobs/{job_id}` | Job state and progress |
+| `GET` | `/api/jobs/{job_id}/results` | Extracted records |
+| `PATCH` | `/api/records/{record_id}` | Human correction (validated and tracked) |
+| `GET` | `/api/jobs/{job_id}/export.csv` | Export records as CSV |
+| `GET` | `/health` | Health check |
 
-If it fails again, the record is marked as needs_review.
+---
 
-5. Human Review
+## Mock provider
 
-Records requiring review are highlighted in the UI.
+The mock provider needs no API key, simulates latency, and gives the same output for the same input. It deliberately returns invalid output for a few tickets so the retry paths run:
 
-The reviewer can see:
+| Ticket | Behaviour | Expected result |
+| --- | --- | --- |
+| `tkt_0010`, `tkt_0042` | Invalid on attempt 1, valid on attempt 2 | `done`, retry count 1 |
+| `tkt_0017` | Invalid on both attempts | `needs_review`, raw output kept |
+| `tkt_0004`, `tkt_0020` | Bodies are `please advise` and `?` | `needs_review`, model not called |
 
-Original ticket content
-Extracted fields
-Validation errors
-Model-generated fields
-Human-edited fields
+Other tickets worth opening: `tkt_0058` (French, amount in EUR), `tkt_0089` (three problems and a renewal threat), `tkt_0105` (typos), `tkt_0131` (phone transcript with a spoken amount).
 
-The reviewer can correct the fields and save the record.
+---
 
-The edited data goes through the same validation process before being accepted.
+## Tests
 
-6. Export
-
-Once processing is complete, the user can export the results as a CSV file.
-
-API Endpoints
-GET    /api/tickets
-POST   /api/jobs
-GET    /api/jobs/{job_id}
-GET    /api/jobs/{job_id}/results
-PATCH  /api/records/{record_id}
-GET    /api/jobs/{job_id}/export.csv
-Testing
-Backend Tests
-
-From the backend directory:
-
+```bash
+cd backend
 pytest -q
+```
 
-The tests cover validation, retry behavior, job processing, human edits, and CSV export.
+The backend tests cover the retry behaviour, an item failing twice landing in `needs_review` while the job still completes, the progress arithmetic and job completion, human edits and CSV export.
 
-Frontend Build
+Frontend production build check:
 
-From the frontend directory:
-
+```bash
+cd frontend
 npm run build
+```
 
-This checks that the Next.js application builds successfully.
+---
 
-Important Test Cases
+## Design decisions
 
-The dataset contains specific tickets for testing different scenarios:
+The decisions and trade-offs are written up in [DECISIONS.md](DECISIONS.md). In short:
 
-tkt_0020: First extraction fails validation, second attempt succeeds.
-tkt_0004: Both attempts fail, so the record goes to needs_review.
-tkt_0058: French-language ticket with EUR information.
-tkt_0089: Ticket containing multiple issues.
-tkt_0105: Ticket containing typing errors.
-tkt_0131: Phone transcript with verbal amounts.
-Design Decisions
+- **Empty tickets** (`please advise`, `?`) are not sent to a model. There is nothing to extract, so a call would only cost money and invent values.
+- **EUR amounts** are not converted, because no exchange rate is defined. `refund_amount` stays empty and the reviewer reads the amount in the raw ticket.
+- **Multi-issue tickets** stay as one record with one primary category, and churn risk takes priority.
+- **Progress** uses polling rather than streaming, for simplicity and reliability on free hosting.
+- **Storage** is in memory, which is enough for this assignment.
 
-The project intentionally uses a simple architecture because the assignment focuses on extraction, validation, retries, and human review.
+---
 
-In-memory storage: Sufficient for the 150-ticket dataset and keeps setup simple.
-Mock provider: Makes the application deterministic and removes the need for external API keys.
-Polling: Used for job progress instead of adding WebSocket infrastructure.
-Pydantic: Provides consistent validation for both model output and human edits.
-One retry: Follows the assignment requirement and prevents endless retries.
-Configurable concurrency: Prevents unlimited extraction tasks from running simultaneously.
+## Deployment
 
-Additional decisions and trade-offs are documented in DECISIONS.md.
+The frontend and backend are deployed separately.
 
-Deployment
+- **Backend (Render):** root directory `backend`, build command `pip install -r requirements.txt`, start command `uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Set `LLM_PROVIDER=mock` and the allowed frontend origin.
+- **Frontend (Vercel):** root directory `frontend`, with `NEXT_PUBLIC_API_URL` set to the backend URL.
 
-The frontend and backend can be deployed separately.
+---
 
-For the deployed frontend, set:
+## Known limitations
 
-NEXT_PUBLIC_API_URL=https://YOUR-BACKEND-URL
+- Jobs, records and human edits are stored in memory and are lost when the backend restarts.
+- The provider is a rule-based mock, not a real LLM, so its company, severity and category rules are simple heuristics.
+- When a ticket gives no severity signal, the mock falls back to `medium` with low confidence instead of leaving the field empty. A production system should leave it empty and flag the record.
+- The retry does not pass the validation error back to the mock provider. A real LLM provider should receive it.
+- When a human edit resolves a `needs_review` record, the job's `needs_review` counter is not decremented.
+- No authentication, since it is outside the scope of the assignment.
 
-The backend can continue using:
+---
 
-LLM_PROVIDER=mock
+## Project structure
 
-No external AI service or API key is required.
+```text
+backend/
+  app/          FastAPI app, worker, mock provider, schemas, store, routes
+  tests/        pytest suite
+  requirements.txt
+  pytest.ini
+frontend/       Next.js App Router application
+DECISIONS.md    Design decisions and trade-offs
+.env.example    Environment variables
+```
 
-Limitations
-Job and record data is stored in memory, so it is cleared when the backend restarts.
-The extraction provider is a deterministic mock provider rather than a real LLM.
-Authentication is not included because it is outside the scope of the assignment.
-Polling is used for progress updates instead of WebSockets.
-Assignment Coverage
- Background extraction jobs
- HTTP 202 job creation
- Configurable concurrency
- Strict Pydantic validation
- One retry on validation failure
- Validation error feedback
- needs_review handling
- Confidence and grounding
- Human editing
- Model vs human field tracking
- Search and filtering
- Job progress
- CSV export
- Deterministic mock provider
- Backend tests
- Frontend production build
-Author
+---
+
+## Author
 
 Lagnasha Tripathy
 B.Tech CSE, ITER, SOA University
