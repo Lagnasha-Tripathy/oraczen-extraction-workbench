@@ -1,173 +1,255 @@
-# Take-home B: Extraction Workbench
 
-## What this is
+# Oraczen Extraction Workbench
 
-Customers send us support tickets as prose: email chains, chat logs, call transcripts,
-occasionally a single word. Downstream systems need structured records. An LLM does the
-first pass; a human reviews anything the model got wrong or was not confident about.
+A simple Human-in-the-Loop extraction system for processing customer support tickets.
 
-Build the tool that human uses.
+The application takes raw support tickets, extracts structured information using a deterministic mock provider, validates the result, retries once if validation fails, and sends records that still fail to `needs_review` for human correction.
 
-You have 150 raw tickets in [data/tickets.jsonl](data/tickets.jsonl). Read fifteen or
-twenty of them before you design anything. They include forwarded chains, email
-signatures, legal footers, typos, a French one, a call transcript, and a ticket whose
-entire body is `?`.
+## Tech Stack
 
-## Timebox and expectations
+- **Backend:** Python, FastAPI, Pydantic, asyncio
+- **Frontend:** Next.js, React, TypeScript, Tailwind CSS
+- **Testing:** Pytest
+- **Storage:** In-memory storage
+- **Provider:** Deterministic mock provider
 
-Budget around 8 hours of focused work, spread over up to 4 days. The "must build"
-section done well beats everything half-done. If you run out of time, stop and write
-what you would have done next in `DECISIONS.md`.
+No database, API key, Redis, Docker, or external LLM is required.
 
-The hard part of this task is not the extraction. It is what your system does when the
-extraction is wrong, and how it tells the user.
+## Main Features
 
-## Stack
+- Browse, search, and filter 150 support tickets
+- Select multiple tickets and start an extraction job
+- Background processing with configurable concurrency
+- Strict Pydantic validation
+- Exactly one retry after validation failure
+- `needs_review` handling for records that fail twice
+- Per-field confidence and grounding information
+- Human editing with validation
+- Tracks model-generated and human-edited fields
+- Live job progress through polling
+- CSV export of results
+- Deterministic failure cases for testing
 
-- Backend in Python. FastAPI preferred; Flask or Django REST are acceptable.
-- Frontend in Next.js with the App Router, TypeScript, and React.
-- Two processes talking over HTTP.
-- Styling is your call. We are not scoring visual polish, but a review tool that is
-  painful to use has failed at its job.
-- No database required. In-memory state that survives for the life of the process is
-  fine. Note in `DECISIONS.md` what breaks when the process restarts.
+## Project Structure
 
-## The record you are extracting
+```text
+oraczen-extraction-workbench/
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── schemas.py
+│   │   ├── store.py
+│   │   ├── worker.py
+│   │   ├── mock_provider.py
+│   │   └── routes/
+│   ├── tests/
+│   └── requirements.txt
+├── frontend/
+├── data/
+│   └── tickets.jsonl
+├── DECISIONS.md
+└── README.md
+Setup
+Prerequisites
 
-```bash
-company            string, required
-product            one of: Zen Orchestrator | Zen Studio | Zen Connect | Zen Insights | Zen Vault
-category           one of: outage | billing | bug | feature_request | how_to | churn_risk
-severity           one of: low | medium | high | critical
-requested_action   one of: refund | credit | fix | callback | information | none
-refund_amount      number, optional, in USD
-deadline           date, optional
-escalated          boolean
-```
+Make sure you have:
 
-Define this as a Pydantic model and validate every model output against it. That
-validation is the point of the exercise, not an afterthought.
+Python 3.11+
+Node.js 18+
+npm
+1. Clone the repository
+git clone https://github.com/Lagnasha-Tripathy/oraczen-extraction-workbench.git
+cd oraczen-extraction-workbench
+2. Start the Backend
 
-## Must build
+Create and activate a virtual environment:
 
-### Backend
+python3 -m venv .venv
+source .venv/bin/activate
 
-`POST /api/jobs` takes a list of ticket ids, returns `202` with a job id, and starts
-processing in the background. The request must not block until extraction finishes.
+Install the dependencies:
 
-`GET /api/jobs/{id}` returns the job's state and its progress: how many items are
-queued, running, done, and failed, plus per-item status.
+cd backend
+pip install -r requirements.txt
 
-`GET /api/jobs/{id}/results` returns the extracted records.
+Start the server:
 
-`PATCH /api/records/{id}` accepts a human correction to any field, validates it the
-same way, and records that the value was human-edited rather than model-generated.
-A reviewer looking at the record later must be able to tell which fields a person
-touched.
+uvicorn app.main:app --reload --port 8000
 
-`GET /api/jobs/{id}/export.csv` returns the reviewed records as CSV with correct
-headers and content type.
+The backend will run at:
 
-Extraction rules:
+http://localhost:8000
 
-- Process items concurrently, with a configurable cap. Firing 150 simultaneous
-  requests at a model provider is not a design.
-- If the model's output fails schema validation, retry once, feeding the validation
-  error back in. If the second attempt also fails, mark the item `needs_review`,
-  keep the raw output, and move on. One bad ticket must never fail the job.
-- Every record carries a per-field confidence or a flag for fields the model was not
-  able to ground in the ticket text. How you represent that is your call; the UI has
-  to be able to surface it.
+You can check that it is running at:
 
-The whole thing must run with no API key configured. Ship a mock provider behind the
-same interface, selected by an environment variable, that produces plausible records
-from the ticket text, is deterministic for the same input, includes a small artificial
-delay so progress is observable, and deliberately returns invalid output for a couple
-of tickets so the retry and `needs_review` paths actually run. We will grade with the
-mock. Using a real provider as well is welcome; use a free tier and never commit a key.
+http://localhost:8000/health
 
-### Frontend
+FastAPI documentation is available at:
 
-`/` lists the tickets with enough of each body visible to be recognisable, lets the
-user filter and select a subset, and starts a job.
+http://localhost:8000/docs
+3. Start the Frontend
 
-`/jobs/[id]` shows progress while the job runs, updating without a manual refresh, and
-per-item state as each finishes. Do not make the user wait for the whole batch to see
-the first result.
+Open a new terminal and go to the frontend:
 
-The results view puts the raw ticket next to the extracted fields so the reviewer can
-check the model's work without switching pages. Fields are editable inline, with
-validation errors shown against the field rather than as a generic failure. Items in
-`needs_review` are visually distinct and sort to the top. Export is one click.
+cd oraczen-extraction-workbench/frontend
+npm install
 
-### Tests
+Create a .env.local file:
 
-At least three backend tests with real assertions:
+NEXT_PUBLIC_API_URL=http://localhost:8000
 
-- one that feeds malformed model output through the validator and asserts the retry
-  happens
-- one that asserts an item which fails twice lands in `needs_review` and the job still
-  completes
-- one that pins the progress arithmetic, including the moment the job flips to done
+Start the frontend:
 
-At least one frontend test, or a paragraph in `DECISIONS.md` on what you would test.
+npm run dev
 
-## Should build, if time allows
+The frontend will run at:
 
-- Cancel a running job, and have the UI reflect it promptly.
-- Keyboard-first review: move between records and fields without the mouse.
-- A filter for "human-edited" records.
-- Re-run extraction on a single record after editing the prompt or the model choice.
+http://localhost:3000
 
-## Stretch, purely optional
+Open that URL in your browser to use the application.
 
-- Optimistic updates on `PATCH` with rollback when the server rejects the edit.
-- Server-sent events instead of polling, with a note on why.
-- Docker Compose that brings both services up with one command.
+Configuration
 
-## Things you have to decide yourself
+The application uses the deterministic mock provider by default.
 
-Any defensible answer scores; an undocumented one does not. A sentence on each in
-`DECISIONS.md`.
+LLM_PROVIDER=mock
+MAX_CONCURRENCY=5
 
-1. A ticket says nothing about severity. Does the model guess, does the field come back
-   empty, or does the record go to `needs_review`? Justify it as a product decision,
-   not a technical one.
-2. Ticket `tkt_0058` is in French and mentions an amount in EUR. `refund_amount` is
-   specified in USD. Decide what you do and make it visible to the reviewer.
-3. Ticket `tkt_0089` contains three separate problems, two categories, and a renewal
-   threat. Your schema allows one category. Decide how you handle multi-issue tickets.
-4. Two tickets have bodies of `please advise` and `?`. Decide whether these are worth
-   sending to a model at all.
-5. Progress reporting: polling or streaming? Say why you picked yours and what it costs.
+MAX_CONCURRENCY controls how many tickets can be processed at the same time.
 
-## Using AI tools
+No external API key is needed.
 
-Use them. Claude, Copilot, Cursor, whatever you normally use. We use them too.
+Application Flow
+1. Select Tickets
 
-The condition: you own every line you submit. In the follow-up interview we will open
-your repo, point at code, and ask why it is written that way, what a given type is at
-that point, and what breaks if we delete a line. Candidates who cannot answer those
-questions about their own submission do not advance, regardless of how good the code
-looks. Do not submit code you have not read.
+The home page displays the available support tickets.
 
-## Submitting
+Users can search, filter by channel, select individual tickets, or select multiple tickets.
 
-Push to a public GitHub repo and send us the link.
+2. Start a Job
 
-Your repo must have:
+When the user starts extraction, the backend immediately creates a job and returns a job ID with HTTP 202.
 
-- `README.md` with setup steps that work on a clean machine. Assume the reviewer has
-  Python and Node and nothing else. If a step is missing, we will not guess it.
-- `DECISIONS.md` covering the five decisions above, what you noticed in the ticket
-  data, what you would do with another day, and which parts you are least happy with.
-  Half a page is plenty. Honest beats impressive here.
-- `.env.example` listing every variable you read. No real keys, ever.
-- Commit history that shows the work: a series of small commits with messages a
-  reviewer can follow. One commit called "initial commit" containing the whole project
-  is an automatic fail, even if the code is excellent.
+The actual processing continues in the background.
 
-We will clone it, follow your README, and expect to be looking at a working app inside
-ten minutes. Test that path on a fresh clone before you send it.
+3. Extract and Validate
 
-Questions about the brief are welcome and never count against you. Email us.
+Each ticket is sent to the mock provider.
+
+The returned data is validated against the required Pydantic schema.
+
+4. Retry Failed Extraction
+
+If validation fails, the system retries the extraction exactly once and provides the validation error as feedback.
+
+If the second attempt succeeds, the record is marked as done.
+
+If it fails again, the record is marked as needs_review.
+
+5. Human Review
+
+Records requiring review are highlighted in the UI.
+
+The reviewer can see:
+
+Original ticket content
+Extracted fields
+Validation errors
+Model-generated fields
+Human-edited fields
+
+The reviewer can correct the fields and save the record.
+
+The edited data goes through the same validation process before being accepted.
+
+6. Export
+
+Once processing is complete, the user can export the results as a CSV file.
+
+API Endpoints
+GET    /api/tickets
+POST   /api/jobs
+GET    /api/jobs/{job_id}
+GET    /api/jobs/{job_id}/results
+PATCH  /api/records/{record_id}
+GET    /api/jobs/{job_id}/export.csv
+Testing
+Backend Tests
+
+From the backend directory:
+
+pytest -q
+
+The tests cover validation, retry behavior, job processing, human edits, and CSV export.
+
+Frontend Build
+
+From the frontend directory:
+
+npm run build
+
+This checks that the Next.js application builds successfully.
+
+Important Test Cases
+
+The dataset contains specific tickets for testing different scenarios:
+
+tkt_0020: First extraction fails validation, second attempt succeeds.
+tkt_0004: Both attempts fail, so the record goes to needs_review.
+tkt_0058: French-language ticket with EUR information.
+tkt_0089: Ticket containing multiple issues.
+tkt_0105: Ticket containing typing errors.
+tkt_0131: Phone transcript with verbal amounts.
+Design Decisions
+
+The project intentionally uses a simple architecture because the assignment focuses on extraction, validation, retries, and human review.
+
+In-memory storage: Sufficient for the 150-ticket dataset and keeps setup simple.
+Mock provider: Makes the application deterministic and removes the need for external API keys.
+Polling: Used for job progress instead of adding WebSocket infrastructure.
+Pydantic: Provides consistent validation for both model output and human edits.
+One retry: Follows the assignment requirement and prevents endless retries.
+Configurable concurrency: Prevents unlimited extraction tasks from running simultaneously.
+
+Additional decisions and trade-offs are documented in DECISIONS.md.
+
+Deployment
+
+The frontend and backend can be deployed separately.
+
+For the deployed frontend, set:
+
+NEXT_PUBLIC_API_URL=https://YOUR-BACKEND-URL
+
+The backend can continue using:
+
+LLM_PROVIDER=mock
+
+No external AI service or API key is required.
+
+Limitations
+Job and record data is stored in memory, so it is cleared when the backend restarts.
+The extraction provider is a deterministic mock provider rather than a real LLM.
+Authentication is not included because it is outside the scope of the assignment.
+Polling is used for progress updates instead of WebSockets.
+Assignment Coverage
+ Background extraction jobs
+ HTTP 202 job creation
+ Configurable concurrency
+ Strict Pydantic validation
+ One retry on validation failure
+ Validation error feedback
+ needs_review handling
+ Confidence and grounding
+ Human editing
+ Model vs human field tracking
+ Search and filtering
+ Job progress
+ CSV export
+ Deterministic mock provider
+ Backend tests
+ Frontend production build
+Author
+
+Lagnasha Tripathy
+B.Tech CSE, ITER, SOA University
