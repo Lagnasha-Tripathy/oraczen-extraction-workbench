@@ -6,7 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import store
 from app.config import ALLOWED_ORIGINS, TICKETS_FILE_PATH
+from app.routes.jobs import router as jobs_router
 from app.schemas import Ticket, TicketListResponse
+
 
 
 @asynccontextmanager
@@ -35,6 +37,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routes
+app.include_router(jobs_router)
+
 
 
 @app.get("/health", tags=["Health"])

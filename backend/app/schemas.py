@@ -78,3 +78,9 @@ class TicketListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class JobCreateRequest(BaseModel):
+    """Request payload for starting a new extraction job."""
+    ticket_ids: list[str] = Field(default_factory=list, description="List of ticket IDs to extract")
+
