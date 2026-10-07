@@ -78,3 +78,46 @@ def query_tickets(
     paginated_items = all_items[offset : offset + limit]
 
     return paginated_items, total_count
+
+
+# -------------------------------------------------------------
+# Jobs & Records Helpers
+# -------------------------------------------------------------
+
+def create_job(job_id: str, ticket_ids: list[str]) -> dict:
+    """Creates a new job in memory with initial progress counters."""
+    job = {
+        "id": job_id,
+        "status": "queued",
+        "ticket_ids": ticket_ids,
+        "total": len(ticket_ids),
+        "queued": len(ticket_ids),
+        "running": 0,
+        "completed": 0,
+        "done": 0,  # alias for completed
+        "needs_review": 0,
+        "failed": 0,
+        "progress_percent": 0.0,
+    }
+    jobs[job_id] = job
+    return job
+
+
+def get_job(job_id: str) -> Optional[dict]:
+    """Retrieves a job by its ID, or None if not found."""
+    return jobs.get(job_id)
+
+
+def save_record(record_id: str, record_data: dict) -> None:
+    """Stores or updates an extracted record in memory."""
+    records[record_id] = record_data
+
+
+def get_record(record_id: str) -> Optional[dict]:
+    """Retrieves an extracted record by its ID, or None if not found."""
+    return records.get(record_id)
+
+
+def get_records_for_job(job_id: str) -> list[dict]:
+    """Retrieves all extracted records associated with a specific job."""
+    return [r for r in records.values() if r.get("job_id") == job_id]
