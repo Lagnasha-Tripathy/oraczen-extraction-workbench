@@ -49,6 +49,7 @@ oraczen-extraction-workbench/
 │   └── tickets.jsonl
 ├── DECISIONS.md
 └── README.md
+```
 Setup
 Prerequisites
 
