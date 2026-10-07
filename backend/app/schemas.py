@@ -84,3 +84,22 @@ class JobCreateRequest(BaseModel):
     """Request payload for starting a new extraction job."""
     ticket_ids: list[str] = Field(default_factory=list, description="List of ticket IDs to extract")
 
+
+class RecordPatch(BaseModel):
+    """
+    Partial update schema for human reviewer corrections.
+    Any field can be updated, but when applied, the resulting record
+    must still satisfy the full ExtractedRecord validation rules.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    company: Optional[str] = None
+    product: Optional[ProductEnum] = None
+    category: Optional[CategoryEnum] = None
+    severity: Optional[SeverityEnum] = None
+    requested_action: Optional[RequestedActionEnum] = None
+    refund_amount: Optional[float] = None
+    deadline: Optional[date] = None
+    escalated: Optional[bool] = None
+
+

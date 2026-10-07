@@ -114,8 +114,14 @@ def save_record(record_id: str, record_data: dict) -> None:
 
 
 def get_record(record_id: str) -> Optional[dict]:
-    """Retrieves an extracted record by its ID, or None if not found."""
-    return records.get(record_id)
+    """Retrieves an extracted record by its ID or ticket_id, or None if not found."""
+    if record_id in records:
+        return records[record_id]
+    for r in records.values():
+        if r.get("ticket_id") == record_id or r.get("id") == record_id:
+            return r
+    return None
+
 
 
 def get_records_for_job(job_id: str) -> list[dict]:

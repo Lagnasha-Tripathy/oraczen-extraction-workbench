@@ -74,3 +74,75 @@ async def get_job_results(job_id: str):
         results.append(record_copy)
 
     return results
+
+
+@router.get("/api/jobs/{job_id}/export.csv")
+async def export_job_csv(job_id: str):
+    """
+    Exports all reviewed/extracted records for a job as a formatted CSV file.
+    Returns HTTP 404 if the job does not exist.
+    """
+    import csv
+    import io
+    from fastapi.responses import Response
+
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job '{job_id}' not found",
+        )
+
+    records = store.get_records_for_job(job_id)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # 1. Header row
+    headers = [
+        "ticket_id",
+        "status",
+        "company",
+        "product",
+        "category",
+        "severity",
+        "requested_action",
+        "refund_amount",
+        "deadline",
+        "escalated",
+        "retry_count",
+        "edited_fields",
+    ]
+    writer.writerow(headers)
+
+    # 2. Data rows
+    for r in records:
+        extracted = r.get("extracted") or {}
+        edited_fields_str = ";".join(r.get("edited_fields", []))
+
+        row = [
+            r.get("ticket_id", ""),
+            r.get("status", ""),
+            extracted.get("company", ""),
+            extracted.get("product", ""),
+            extracted.get("category", ""),
+            extracted.get("severity", ""),
+            extracted.get("requested_action", ""),
+            extracted.get("refund_amount") if extracted.get("refund_amount") is not None else "",
+            str(extracted.get("deadline")) if extracted.get("deadline") is not None else "",
+            extracted.get("escalated") if extracted.get("escalated") is not None else "",
+            r.get("retry_count", 0),
+            edited_fields_str,
+        ]
+        writer.writerow(row)
+
+    csv_content = output.getvalue()
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="job_{job_id}_export.csv"',
+        },
+    )
+

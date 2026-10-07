@@ -7,7 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import store
 from app.config import ALLOWED_ORIGINS, TICKETS_FILE_PATH
 from app.routes.jobs import router as jobs_router
+from app.routes.records import router as records_router
 from app.schemas import Ticket, TicketListResponse
+
 
 
 
@@ -40,6 +42,8 @@ app.add_middleware(
 
 # Register routes
 app.include_router(jobs_router)
+app.include_router(records_router)
+
 
 
 
