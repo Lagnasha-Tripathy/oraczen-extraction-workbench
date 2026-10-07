@@ -55,7 +55,7 @@ async def test_get_job_progress_and_completion():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Start a job with 2 tickets
-        start_res = await client.post("/api/jobs", json={"ticket_ids": ["tkt_0001", "tkt_0020"]})
+        start_res = await client.post("/api/jobs", json={"ticket_ids": ["tkt_0001", "tkt_0002"]})
         assert start_res.status_code == 202
         job_id = start_res.json()["id"]
 

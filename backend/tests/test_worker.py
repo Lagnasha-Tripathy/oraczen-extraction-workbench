@@ -16,40 +16,39 @@ def ensure_tickets_loaded():
 @pytest.mark.asyncio
 async def test_ticket_retry_recovers():
     """
-    TEST 1: tkt_0020
+    TEST 1: tkt_0010
     Attempt 1 fails schema validation.
     Attempt 2 succeeds.
     Final status should be 'done' with retry_count = 1.
     """
     job_id = "test_job_retry"
-    store.create_job(job_id, ["tkt_0020"])
+    store.create_job(job_id, ["tkt_0010"])
     semaphore = asyncio.Semaphore(5)
 
-    record = await process_ticket(job_id, "tkt_0020", semaphore)
+    record = await process_ticket(job_id, "tkt_0010", semaphore)
 
     # Assertions
     assert record["status"] == "done", f"Expected 'done' but got {record['status']}"
     assert record["retry_count"] == 1, f"Expected retry_count=1 but got {record['retry_count']}"
     assert record["extracted"] is not None, "Expected extracted data to be populated"
-    assert record["extracted"]["company"] == "Vireo Health"
-    assert record["extracted"]["product"] == "Zen Studio"
+    assert record["extracted"]["company"] == "Bluepeak Retail"
     assert record["validation_errors"] is None, "Validation errors should be cleared upon successful retry"
 
 
 @pytest.mark.asyncio
 async def test_ticket_double_failure_needs_review():
     """
-    TEST 2: tkt_0004
+    TEST 2: tkt_0017
     Attempt 1 fails schema validation.
     Attempt 2 also fails schema validation.
     Final status should be 'needs_review' with retry_count = 1,
     retaining raw_output and validation_errors.
     """
     job_id = "test_job_needs_review"
-    store.create_job(job_id, ["tkt_0004"])
+    store.create_job(job_id, ["tkt_0017"])
     semaphore = asyncio.Semaphore(5)
 
-    record = await process_ticket(job_id, "tkt_0004", semaphore)
+    record = await process_ticket(job_id, "tkt_0017", semaphore)
 
     # Assertions
     assert record["status"] == "needs_review", f"Expected 'needs_review' but got {record['status']}"
@@ -75,9 +74,9 @@ async def test_progress_arithmetic_and_completion():
     # - tkt_0001 (done on attempt 1)
     # - tkt_0002 (done on attempt 1)
     # - tkt_0003 (done on attempt 1)
-    # - tkt_0020 (done on attempt 2)
-    # - tkt_0004 (needs_review on attempt 2)
-    ticket_ids = ["tkt_0001", "tkt_0002", "tkt_0003", "tkt_0020", "tkt_0004"]
+    # - tkt_0010 (done on attempt 2)
+    # - tkt_0017 (needs_review on attempt 2)
+    ticket_ids = ["tkt_0001", "tkt_0002", "tkt_0003", "tkt_0010", "tkt_0017"]
     store.create_job(job_id, ticket_ids)
 
     # Execute the entire job using process_job
@@ -90,8 +89,8 @@ async def test_progress_arithmetic_and_completion():
     failed = job["failed"]
 
     assert total == len(ticket_ids)
-    assert completed == 4  # tkt_0001, tkt_0002, tkt_0003, tkt_0020
-    assert needs_review == 1  # tkt_0004
+    assert completed == 4  # tkt_0001, tkt_0002, tkt_0003, tkt_0010
+    assert needs_review == 1  # tkt_0017
     assert failed == 0
 
     # completed + needs_review + failed must equal total

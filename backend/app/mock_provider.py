@@ -6,6 +6,11 @@ from typing import Optional, Union
 from app.config import MOCK_DELAY_MS
 from app.schemas import Ticket
 
+# Deliberate failures so the retry and needs_review paths really run.
+# (tkt_0004 and tkt_0020 are NOT here: they have empty bodies and are skipped in worker.py.)
+FAIL_ONCE = {"tkt_0010", "tkt_0042"}   # invalid on attempt 1, valid on the retry
+FAIL_TWICE = {"tkt_0017"}              # invalid on both attempts -> needs_review
+
 # Map known email domains to clean company names
 DOMAIN_TO_COMPANY = {
     "castlerock.com": "Castlerock Mining",
@@ -52,18 +57,18 @@ def _extract_product(ticket_text: str) -> str:
     elif "zen vault" in text_lower:
         return "Zen Vault"
     else:
-        # Default fallback product
+        # Default fallback product (confidence is set low for this case)
         return "Zen Connect"
 
 
 def _extract_category(ticket_text: str) -> str:
-    """Determines the ticket category based on keywords."""
+    """Determines the ticket category based on keywords. Churn threats are checked first."""
     text_lower = ticket_text.lower()
 
-    if any(k in text_lower for k in ["outage", "502", "unavailable", "blank", "spinning", "service down"]):
-        return "outage"
-    elif any(k in text_lower for k in ["non-renewal", "termination", "cancel", "will not renew"]):
+    if any(k in text_lower for k in ["non-renewal", "termination", "cancel", "will not renew", "not renew"]):
         return "churn_risk"
+    elif any(k in text_lower for k in ["outage", "502", "504", "unavailable", "service down"]):
+        return "outage"
     elif any(k in text_lower for k in ["invoice", "billed", "charge", "refund", "delta", "prélèvement"]):
         return "billing"
     elif any(k in text_lower for k in ["sso", "roadmap", "row-level", "bulk"]):
@@ -77,7 +82,8 @@ def _extract_category(ticket_text: str) -> str:
 def _extract_severity(ticket_text: str) -> str:
     """
     Determines severity: low | medium | high | critical.
-    Uses keywords from ticket subject and body.
+    Falls back to "medium" when the ticket gives no signal; confidence for
+    that fallback is set low in get_confidence_scores so the reviewer can see it.
     """
     text_lower = ticket_text.lower()
 
@@ -110,31 +116,24 @@ def _extract_requested_action(ticket_text: str) -> str:
 
 
 def _extract_refund_amount(ticket_text: str) -> Optional[float]:
-    """Finds dollar or euro amounts mentioned in the text."""
-    # Look for dollar amounts: e.g. $4,820 or $18,400
-    match_usd = re.search(r"\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)", ticket_text)
-    if match_usd:
-        clean_number = match_usd.group(1).replace(",", "")
-        return float(clean_number)
-
-    # Look for euro amounts: e.g. 4 820 EUR (ticket 58)
-    match_eur = re.search(r"([0-9]{1,3}(?:[\s,][0-9]{3})*)\s*EUR", ticket_text, re.IGNORECASE)
-    if match_eur:
-        clean_number = match_eur.group(1).replace(" ", "").replace(",", "")
-        return float(clean_number)
-
+    """
+    USD only. EUR amounts are deliberately NOT converted (no FX rate is defined),
+    so they return None and the reviewer reads the amount in the raw ticket.
+    Several different USD amounts are ambiguous, so they also return None.
+    """
+    amounts = re.findall(r"\$\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)", ticket_text)
+    if len(amounts) == 1:
+        return float(amounts[0].replace(",", ""))
     return None
 
 
 def _extract_deadline(ticket_text: str) -> Optional[date]:
-    """Finds relative calendar deadlines mentioned in August 2026."""
-    # Matches: "before the 27th", "on the 14th", "the 7th"
-    match = re.search(r"\b(?:the|before|on)\s+([0-9]{1,2})(?:st|nd|rd|th)?\b", ticket_text, re.IGNORECASE)
+    """Only forward-looking phrases ('before the 27th', 'by the 14th') count as deadlines."""
+    match = re.search(r"\b(?:before|by)\s+the\s+([0-9]{1,2})(?:st|nd|rd|th)?\b", ticket_text, re.IGNORECASE)
     if match:
         day = int(match.group(1))
         if 1 <= day <= 31:
             return date(2026, 8, day)
-
     return None
 
 
@@ -147,19 +146,19 @@ def _extract_escalated(ticket_text: str) -> bool:
 async def extract_ticket(ticket: Union[Ticket, dict], attempt: int = 1) -> dict:
     """
     Main extraction function for the mock LLM provider.
-    
+
     Arguments:
     - ticket: The raw ticket (Pydantic model or dictionary)
     - attempt: The attempt number (1 for initial extraction, 2 for retry)
-    
+
     Returns:
     - A Python dictionary containing the 8 extracted fields.
-    
+
     Includes intentional failures for test demonstration:
-    - tkt_0020: fails on attempt 1, succeeds on attempt 2.
-    - tkt_0004: fails on both attempt 1 and attempt 2.
+    - tkt_0010, tkt_0042: invalid on attempt 1, valid on attempt 2.
+    - tkt_0017: invalid on both attempts (routes to needs_review).
     """
-    # 1. Simulate the artificial processing delay of an LLM call
+    # Simulate the artificial processing delay of an LLM call
     if MOCK_DELAY_MS > 0:
         await asyncio.sleep(MOCK_DELAY_MS / 1000.0)
 
@@ -177,63 +176,30 @@ async def extract_ticket(ticket: Union[Ticket, dict], attempt: int = 1) -> dict:
 
     combined_text = f"{subject}\n{body}"
 
-    # -------------------------------------------------------------
-    # INTENTIONAL TEST CASE 1: tkt_0020 (Body is just "?")
-    # - Attempt 1: Returns invalid fields (empty company, invalid product).
-    # - Attempt 2: Recovers and returns valid fields.
-    # -------------------------------------------------------------
-    if ticket_id == "tkt_0020":
-        if attempt == 1:
-            return {
-                "company": "",  # Invalid: empty string violates min_length=1
-                "product": "Unknown Product",  # Invalid: not in ProductEnum
-                "category": "unknown_category",  # Invalid: not in CategoryEnum
-                "severity": "invalid_severity",  # Invalid: not in SeverityEnum
-                "requested_action": "none",
-                "refund_amount": None,
-                "deadline": None,
-                "escalated": False,
-            }
-        else:
-            # Attempt 2 recovers with valid fields
-            return {
-                "company": _extract_company(combined_text, from_email),
-                "product": "Zen Studio",
-                "category": "how_to",
-                "severity": "low",
-                "requested_action": "information",
-                "refund_amount": None,
-                "deadline": None,
-                "escalated": False,
-            }
-
-    # -------------------------------------------------------------
-    # INTENTIONAL TEST CASE 2: tkt_0004 (Body is "please advise")
-    # - Attempt 1: Returns invalid fields.
-    # - Attempt 2: Still returns invalid fields (routes to needs_review).
-    # -------------------------------------------------------------
-    if ticket_id == "tkt_0004":
+    # Deliberately invalid output so the retry and needs_review paths run
+    if ticket_id in FAIL_TWICE or (ticket_id in FAIL_ONCE and attempt == 1):
         return {
-            "company": "",  # Invalid: empty string violates min_length=1
-            "product": "Unknown Product",  # Invalid: not in ProductEnum
-            "category": "unclear",  # Invalid: not in CategoryEnum
-            "severity": "unknown",  # Invalid: not in SeverityEnum
+            "company": "",                      # violates min_length=1
+            "product": "Unknown Product",       # not in the product enum
+            "category": "unclear",              # not in the category enum
+            "severity": "unknown",              # not in the severity enum
             "requested_action": "none",
             "refund_amount": None,
             "deadline": None,
             "escalated": False,
         }
 
-    # -------------------------------------------------------------
-    # NORMAL DETERMINISTIC EXTRACTION FOR ALL OTHER TICKETS
-    # -------------------------------------------------------------
+    # Normal deterministic extraction
+    action = _extract_requested_action(combined_text)
+    amount = _extract_refund_amount(combined_text)
     return {
         "company": _extract_company(combined_text, from_email),
         "product": _extract_product(combined_text),
         "category": _extract_category(combined_text),
         "severity": _extract_severity(combined_text),
-        "requested_action": _extract_requested_action(combined_text),
-        "refund_amount": _extract_refund_amount(combined_text),
+        "requested_action": action,
+        # an amount only makes sense when a refund or credit was asked for
+        "refund_amount": amount if action in ("refund", "credit") else None,
         "deadline": _extract_deadline(combined_text),
         "escalated": _extract_escalated(combined_text),
     }
@@ -263,9 +229,15 @@ def get_confidence_scores(ticket: Union[Ticket, dict], extracted: dict) -> dict[
     category = extracted.get("category", "")
     confidence["category"] = 0.90 if category in ["outage", "billing", "churn_risk"] else 0.75
 
-    # Severity confidence: higher if critical/low markers exist
+    # Severity confidence: the "medium" fallback means the ticket gave no signal,
+    # so it gets a low score and the reviewer can see it was not grounded
     severity = extracted.get("severity", "")
-    confidence["severity"] = 0.92 if severity in ["critical", "low"] else 0.70
+    if severity in ["critical", "low"]:
+        confidence["severity"] = 0.92
+    elif severity == "high":
+        confidence["severity"] = 0.80
+    else:
+        confidence["severity"] = 0.30
 
     # Requested action confidence
     action = extracted.get("requested_action", "")

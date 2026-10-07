@@ -11,12 +11,13 @@ router = APIRouter(tags=["Records"])
 async def patch_record(record_id: str, patch: RecordPatch):
     """
     Applies human corrections to any extracted field.
-    
+
     1. Looks up the existing record (returns 404 if not found).
     2. Merges human-provided fields with existing values.
     3. Validates the complete merged result against ExtractedRecord.
     4. If invalid, rejects with 422 and leaves original record untouched.
-    5. If valid, saves changes and marks touched fields in edited_fields.
+    5. If valid, saves changes and marks only fields whose value
+       actually changed in edited_fields.
     """
     record = store.get_record(record_id)
     if not record:
@@ -30,11 +31,11 @@ async def patch_record(record_id: str, patch: RecordPatch):
     if not patch_data:
         return record
 
-    # Base dictionary: current extracted values or empty dict if previously failed
+    # Base dictionary: current extracted values, or empty dict if previously failed/skipped
     current_extracted = record.get("extracted") or {}
     merged_data = {**current_extracted, **patch_data}
 
-    # Validate merged result against the exact same ExtractedRecord Pydantic schema
+    # Validate the merged result against the exact same schema used for model output
     try:
         validated_record = ExtractedRecord(**merged_data)
     except ValidationError as err:
@@ -42,7 +43,7 @@ async def patch_record(record_id: str, patch: RecordPatch):
             f"{'.'.join(str(loc) for loc in e.get('loc', []))}: {e.get('msg')}"
             for e in err.errors()
         ]
-        # Reject edit and leave original record completely unchanged
+        # Reject the edit and leave the original record completely unchanged
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"errors": error_messages},
@@ -50,17 +51,20 @@ async def patch_record(record_id: str, patch: RecordPatch):
 
     # Save changes under lock
     async with store.lock:
-        record["extracted"] = validated_record.model_dump()
+        new_extracted = validated_record.model_dump()
+        record["extracted"] = new_extracted
 
-        # Track which fields were human-edited
         if "edited_fields" not in record:
             record["edited_fields"] = []
 
+        # Compare validated values on both sides so types match (e.g. dates),
+        # and only mark fields whose value really changed
         for field_name in patch_data.keys():
-            if field_name not in record["edited_fields"]:
-                record["edited_fields"].append(field_name)
+            if new_extracted.get(field_name) != current_extracted.get(field_name):
+                if field_name not in record["edited_fields"]:
+                    record["edited_fields"].append(field_name)
 
-        # If this record was in needs_review, successful human correction resolves it to 'done'
+        # A successful human correction resolves a needs_review record to 'done'
         if record.get("status") == "needs_review":
             record["status"] = "done"
             record["validation_errors"] = None

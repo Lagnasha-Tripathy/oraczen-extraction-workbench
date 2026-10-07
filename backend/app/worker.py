@@ -1,10 +1,36 @@
 import asyncio
+import re
+
 from pydantic import ValidationError
 
 from app.config import MAX_CONCURRENCY
 from app.mock_provider import extract_ticket, get_confidence_scores
 from app.schemas import ExtractedRecord
 from app import store
+
+CONFIDENCE_FIELDS = [
+    "company",
+    "product",
+    "category",
+    "severity",
+    "requested_action",
+    "refund_amount",
+    "deadline",
+    "escalated",
+]
+
+
+def _is_trivial(ticket) -> bool:
+    """True when the body has too little real content to extract anything from."""
+    body = ticket.get("body", "") if isinstance(ticket, dict) else ticket.body
+    return len(re.sub(r"\W", "", body or "")) < 15
+
+
+def _format_errors(err: ValidationError) -> list:
+    return [
+        f"{'.'.join(str(loc) for loc in e.get('loc', []))}: {e.get('msg')}"
+        for e in err.errors()
+    ]
 
 
 def _update_job_progress_in_lock(job_id: str, item_final_status: str) -> None:
@@ -45,17 +71,16 @@ def _update_job_progress_in_lock(job_id: str, item_final_status: str) -> None:
 async def process_ticket(job_id: str, ticket_id: str, semaphore: asyncio.Semaphore) -> dict:
     """
     Processes a single ticket with concurrency control and exactly one retry.
-    
+
     Flow:
     1. Acquire semaphore (capped by MAX_CONCURRENCY).
-    2. Attempt 1: Call mock provider.
-    3. Validate with ExtractedRecord(**raw_output).
-    4. If valid -> status = "done", retry_count = 0.
-    5. If invalid -> retry once (attempt 2).
-       - If valid on attempt 2 -> status = "done", retry_count = 1.
-       - If invalid on attempt 2 -> status = "needs_review", retry_count = 1.
-    6. If unexpected exception -> status = "failed".
-    7. Atomically save record and update job progress.
+    2. If the body has nothing to extract -> needs_review, model not called.
+    3. Attempt 1: call mock provider and validate with ExtractedRecord.
+    4. If invalid -> retry once (attempt 2).
+       - Valid on attempt 2 -> status = "done", retry_count = 1.
+       - Invalid on attempt 2 -> status = "needs_review", retry_count = 1.
+    5. Unexpected exception -> status = "failed".
+    6. Save record and update job progress under the lock.
     """
     ticket = store.get_ticket(ticket_id)
     if not ticket:
@@ -85,6 +110,28 @@ async def process_ticket(job_id: str, ticket_id: str, semaphore: asyncio.Semapho
                 job["queued"] = max(0, job["queued"] - 1)
                 job["running"] += 1
 
+        # Skip the model entirely for tickets with nothing to extract
+        # (the lock above is already released, so taking it again is safe)
+        if _is_trivial(ticket):
+            record = {
+                "id": ticket_id,
+                "job_id": job_id,
+                "ticket_id": ticket_id,
+                "status": "needs_review",
+                "extracted": None,
+                "raw_output": None,
+                "validation_errors": [
+                    "Ticket body has no extractable content; model not called."
+                ],
+                "retry_count": 0,
+                "confidence": {},
+                "edited_fields": [],
+            }
+            async with store.lock:
+                store.save_record(ticket_id, record)
+                _update_job_progress_in_lock(job_id, "needs_review")
+            return record
+
         status = "failed"
         retry_count = 0
         extracted_data = None
@@ -98,17 +145,13 @@ async def process_ticket(job_id: str, ticket_id: str, semaphore: asyncio.Semapho
             raw_output = await extract_ticket(ticket, attempt=1)
             try:
                 validated = ExtractedRecord(**raw_output)
-                # Succeeded on Attempt 1
                 status = "done"
                 retry_count = 0
                 extracted_data = validated.model_dump()
             except ValidationError as err1:
-                # Attempt 1 failed schema validation! Trigger retry.
+                # Attempt 1 failed schema validation -> retry once
                 retry_count = 1
-                validation_errors = [
-                    f"{'.'.join(str(loc) for loc in err.get('loc', []))}: {err.get('msg')}"
-                    for err in err1.errors()
-                ]
+                validation_errors = _format_errors(err1)
 
                 # ------------------------------------------------
                 # ATTEMPT 2: Exactly one retry
@@ -117,21 +160,17 @@ async def process_ticket(job_id: str, ticket_id: str, semaphore: asyncio.Semapho
                 raw_output = second_output
                 try:
                     validated = ExtractedRecord(**second_output)
-                    # Succeeded on Attempt 2
                     status = "done"
                     extracted_data = validated.model_dump()
                     validation_errors = None
                 except ValidationError as err2:
-                    # Attempt 2 failed as well -> Mark needs_review
+                    # Attempt 2 failed as well -> needs_review
                     status = "needs_review"
                     extracted_data = None
-                    validation_errors = [
-                        f"{'.'.join(str(loc) for loc in err.get('loc', []))}: {err.get('msg')}"
-                        for err in err2.errors()
-                    ]
+                    validation_errors = _format_errors(err2)
 
         except Exception as unexpected_err:
-            # Catch unexpected Python errors so one bad ticket never crashes the job
+            # One bad ticket must never crash the job
             status = "failed"
             validation_errors = [f"Unexpected error: {str(unexpected_err)}"]
 
@@ -139,21 +178,8 @@ async def process_ticket(job_id: str, ticket_id: str, semaphore: asyncio.Semapho
         if extracted_data:
             confidence = get_confidence_scores(ticket, extracted_data)
         else:
-            confidence = {
-                field: 0.0
-                for field in [
-                    "company",
-                    "product",
-                    "category",
-                    "severity",
-                    "requested_action",
-                    "refund_amount",
-                    "deadline",
-                    "escalated",
-                ]
-            }
+            confidence = {field: 0.0 for field in CONFIDENCE_FIELDS}
 
-        # Build final record dictionary
         record = {
             "id": ticket_id,
             "job_id": job_id,
@@ -189,13 +215,11 @@ async def process_job(job_id: str) -> dict:
     # Limit concurrency to MAX_CONCURRENCY tasks at a time
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
-    # Create an async task for each ticket
     tasks = [
         asyncio.create_task(process_ticket(job_id, t_id, semaphore))
         for t_id in ticket_ids
     ]
 
-    # Wait for all ticket tasks to finish
     await asyncio.gather(*tasks)
 
     # Mark the job completed
