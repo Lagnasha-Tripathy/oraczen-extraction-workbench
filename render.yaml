@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: oraczen-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MAX_CONCURRENCY
+        value: "5"
+      - key: MOCK_DELAY_MS
+        value: "200"
+      - key: ALLOWED_ORIGINS
+        value: "http://localhost:3000,http://127.0.0.1:3000"
+    plan: free
+    autoDeploy: true
