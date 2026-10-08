@@ -1,0 +1,18 @@
+name: Keep Backend Alive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: |
+          echo "Pinging backend..."
+          curl --fail --silent --show-error --max-time 60 \
+            https://oraczen-backend-ugoa.onrender.com/health
+          echo ""
+          echo "Backend is alive."
