@@ -2,10 +2,20 @@
 
 A review tool for LLM-extracted support-ticket records. Raw tickets are turned into structured records, every output is validated against a strict schema, a failed extraction is retried once, and anything still doubtful goes to a human reviewer.
 
-**Stack:** FastAPI (Python) backend and Next.js (App Router, TypeScript) frontend. Runs with **no API key** using a deterministic mock provider.
+**Stack:** FastAPI (Python) backend · Next.js (App Router, TypeScript) frontend · No external API key required.
 
-**Live demo:** https://frontend-woad-chi-lb8qq4qx8a.vercel.app
-**Backend API:** https://oraczen-backend-ugoa.onrender.com (the free instance sleeps when idle, so the first request after inactivity can take ~30 seconds)
+---
+
+## 🚀 Live Deployment
+
+| | URL |
+|--|--|
+| 🌐 **Frontend (Vercel)** | **https://frontend-woad-chi-lb8qq4qx8a.vercel.app** |
+| ⚙️ **Backend API (Render)** | **https://oraczen-backend-ugoa.onrender.com** |
+| 🏥 **Health Check** | https://oraczen-backend-ugoa.onrender.com/health |
+| 📖 **API Docs** | https://oraczen-backend-ugoa.onrender.com/docs |
+
+> ⚠️ The Render free tier sleeps after 15 min of inactivity. The first request after sleep takes ~30 seconds to wake up — subsequent requests are instant.
 
 ---
 
