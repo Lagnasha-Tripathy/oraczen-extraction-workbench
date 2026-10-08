@@ -88,17 +88,17 @@ class JobCreateRequest(BaseModel):
 class RecordPatch(BaseModel):
     """
     Partial update schema for human reviewer corrections.
-    Any field can be updated, but when applied, the resulting record
-    must still satisfy the full ExtractedRecord validation rules.
+    Any field can be updated, but when applied, supplied fields
+    must satisfy the same validation rules as ExtractedRecord.
     """
     model_config = ConfigDict(extra="forbid")
 
-    company: Optional[str] = None
+    company: Optional[str] = Field(default=None, min_length=1)
     product: Optional[ProductEnum] = None
     category: Optional[CategoryEnum] = None
     severity: Optional[SeverityEnum] = None
     requested_action: Optional[RequestedActionEnum] = None
-    refund_amount: Optional[float] = None
+    refund_amount: Optional[float] = Field(default=None, ge=0)
     deadline: Optional[date] = None
     escalated: Optional[bool] = None
 

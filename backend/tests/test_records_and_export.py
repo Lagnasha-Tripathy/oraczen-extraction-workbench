@@ -199,3 +199,90 @@ async def test_csv_export_handles_needs_review_and_failed_without_crash():
         # Extracted fields should be empty strings without crashing
         assert row[2] == ""  # company
         assert row[3] == ""  # product
+
+
+@pytest.mark.asyncio
+async def test_patch_needs_review_partial_edit_and_resolution():
+    """
+    TEST 6: Human editing on a needs_review record (e.g. tkt_0004).
+    1. Verify initial status is needs_review.
+    2. Edit ONE valid field (company="Sunbelt") while other required fields are still missing.
+       - Assert HTTP 200.
+       - Assert company is saved.
+       - Assert status remains needs_review.
+       - Assert edited_fields contains only ['company'].
+    3. Send an invalid field edit (severity="extreme").
+       - Assert HTTP 422.
+       - Assert invalid value is not saved.
+    4. Provide the remaining required fields.
+       - Assert HTTP 200.
+       - Assert record status flips from needs_review to done.
+       - Assert validation_errors is cleared to None.
+       - Assert all human-edited fields are in edited_fields.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create job with tkt_0004 (designed to fail validation twice and land in needs_review)
+        start_res = await client.post("/api/jobs", json={"ticket_ids": ["tkt_0004"]})
+        job_id = start_res.json()["id"]
+
+        for _ in range(20):
+            status_res = await client.get(f"/api/jobs/{job_id}")
+            if status_res.json()["status"] == "completed":
+                break
+            await asyncio.sleep(0.1)
+
+        # 1. Verify initial status is needs_review
+        rec = store.get_record("tkt_0004")
+        assert rec is not None
+        assert rec["status"] == "needs_review"
+
+        # 2. Edit ONLY one valid field ('company')
+        patch1_res = await client.patch(
+            "/api/records/tkt_0004",
+            json={"company": "Sunbelt"}
+        )
+        assert patch1_res.status_code == 200
+        data1 = patch1_res.json()
+        assert data1["extracted"]["company"] == "Sunbelt"
+        assert data1["status"] == "needs_review"
+        assert data1["edited_fields"] == ["company"]
+        assert data1["validation_errors"] is not None
+
+        # 3. Try invalid edit ('severity': 'extreme') -> rejected with 422
+        bad_patch_res = await client.patch(
+            "/api/records/tkt_0004",
+            json={"severity": "extreme"}
+        )
+        assert bad_patch_res.status_code == 422
+        # Verify company is still 'Sunbelt' and severity was not saved
+        rec_after_bad = store.get_record("tkt_0004")
+        assert rec_after_bad["extracted"]["company"] == "Sunbelt"
+        assert "severity" not in rec_after_bad.get("edited_fields", [])
+
+        # 4. Fill in remaining required fields to resolve the record
+        patch2_res = await client.patch(
+            "/api/records/tkt_0004",
+            json={
+                "product": "Zen Connect",
+                "category": "bug",
+                "severity": "low",
+                "requested_action": "none",
+                "escalated": False,
+            }
+        )
+        assert patch2_res.status_code == 200
+        data2 = patch2_res.json()
+        assert data2["status"] == "done"
+        assert data2["validation_errors"] is None
+        assert data2["extracted"]["company"] == "Sunbelt"
+        assert data2["extracted"]["product"] == "Zen Connect"
+        assert set(data2["edited_fields"]) == {
+            "company",
+            "product",
+            "category",
+            "severity",
+            "requested_action",
+            "escalated",
+        }
+

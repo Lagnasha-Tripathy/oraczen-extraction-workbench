@@ -9,12 +9,18 @@ const NULLABLE = [
 function cleanPayload(fields: Record<string, any>) {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(fields)) {
-    if (NULLABLE.includes(k) && (v === "" || v === undefined)) out[k] = null;
-    else if (k === "refund_amount" && v !== null) out[k] = Number(v);
-    else out[k] = v;
+    if (v === undefined) continue;
+    if ((k === "deadline" || k === "refund_amount") && (v === "" || v === null)) {
+      out[k] = null;
+    } else if (k === "refund_amount" && v !== null && v !== "") {
+      out[k] = Number(v);
+    } else {
+      out[k] = v;
+    }
   }
   return out;
 }
+
 
 function formatError(body: any): string {
   const d = body?.detail;

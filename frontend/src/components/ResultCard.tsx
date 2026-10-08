@@ -45,6 +45,27 @@ export const ResultCard: React.FC<ResultCardProps> = ({ record, onSave }) => {
     escalated: !!extracted.escalated,
   });
 
+  const [dirtyFields, setDirtyFields] = useState<Set<keyof ExtractedFields>>(new Set());
+
+  // Sync formData when record updates from save or polling
+  React.useEffect(() => {
+    if (record.extracted) {
+      setFormData((prev) => ({
+        company: record.extracted?.company ?? prev.company,
+        product: record.extracted?.product ?? prev.product,
+        category: record.extracted?.category ?? prev.category,
+        severity: record.extracted?.severity ?? prev.severity,
+        requested_action: record.extracted?.requested_action ?? prev.requested_action,
+        refund_amount: record.extracted?.refund_amount ?? prev.refund_amount,
+        deadline: record.extracted?.deadline ?? prev.deadline,
+        escalated:
+          record.extracted?.escalated !== undefined
+            ? record.extracted.escalated
+            : prev.escalated,
+      }));
+    }
+  }, [record.extracted]);
+
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -53,68 +74,50 @@ export const ResultCard: React.FC<ResultCardProps> = ({ record, onSave }) => {
 
   const handleFieldChange = (key: keyof ExtractedFields, value: any) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
+    setDirtyFields((prev) => new Set(prev).add(key));
     setSavedSuccess(false);
     setErrorMessage(null);
   };
 
   const handleSave = async () => {
-  setSaving(true);
-  setErrorMessage(null);
-  setSavedSuccess(false);
+    setSaving(true);
+    setErrorMessage(null);
+    setSavedSuccess(false);
 
-  try {
-    const patch: Partial<ExtractedFields> = {};
+    try {
+      const patch: Partial<ExtractedFields> = {};
 
-    if (formData.company !== extracted.company) {
-      patch.company = formData.company;
-    }
+      for (const key of Array.from(dirtyFields)) {
+        const val = formData[key];
+        if (key === "refund_amount") {
+          patch.refund_amount =
+            val === "" || val === null || val === undefined ? null : Number(val);
+        } else if (key === "deadline") {
+          patch.deadline =
+            val === "" || val === null || val === undefined ? null : String(val);
+        } else {
+          (patch as any)[key] = val;
+        }
+      }
 
-    if (formData.product !== extracted.product) {
-      patch.product = formData.product;
-    }
 
-    if (formData.category !== extracted.category) {
-      patch.category = formData.category;
-    }
+      if (Object.keys(patch).length === 0) {
+        setSavedSuccess(true);
+        setTimeout(() => setSavedSuccess(false), 3000);
+        return;
+      }
 
-    if (formData.severity !== extracted.severity) {
-      patch.severity = formData.severity;
-    }
-
-    if (formData.requested_action !== extracted.requested_action) {
-      patch.requested_action = formData.requested_action;
-    }
-
-    if (formData.refund_amount !== extracted.refund_amount) {
-      patch.refund_amount =
-        formData.refund_amount === "" ? null : formData.refund_amount;
-    }
-
-    if (formData.deadline !== extracted.deadline) {
-      patch.deadline =
-        formData.deadline === "" ? null : formData.deadline;
-    }
-
-    if (formData.escalated !== extracted.escalated) {
-      patch.escalated = formData.escalated;
-    }
-
-    if (Object.keys(patch).length === 0) {
+      await onSave(record.id, patch);
+      setDirtyFields(new Set());
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
-      return;
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to save changes");
+    } finally {
+      setSaving(false);
     }
+  };
 
-    await onSave(record.id, patch);
-
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
-  } catch (err: any) {
-    setErrorMessage(err.message || "Failed to save changes");
-  } finally {
-    setSaving(false);
-  }
-};
 
  const renderProvenance = (fieldName: string) => {
   const isHuman = record.edited_fields?.includes(fieldName);
