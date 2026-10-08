@@ -4,8 +4,8 @@ A review tool for LLM-extracted support-ticket records. Raw tickets are turned i
 
 **Stack:** FastAPI (Python) backend and Next.js (App Router, TypeScript) frontend. Runs with **no API key** using a deterministic mock provider.
 
-**Live demo:** `<your Vercel URL>`
-**Backend API:** `<your Render URL>` (the free instance sleeps when idle, so the first request can take about 50 seconds)
+**Live demo:** https://frontend-woad-chi-lb8qq4qx8a.vercel.app
+**Backend API:** https://oraczen-backend-ugoa.onrender.com (the free instance sleeps when idle, so the first request after inactivity can take ~30 seconds)
 
 ---
 
